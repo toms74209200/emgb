@@ -63,6 +63,6 @@ mod tests {
         let bootrom = bootrom::Bootrom::new(vec![0; 256].into_boxed_slice());
         let mut peripherals = Peripherals::new(bootrom);
         peripherals.write(0xff50, 0);
-        assert_eq!(peripherals.bootrom.is_active(), true);
+        assert!(peripherals.bootrom.is_active());
     }
 }
