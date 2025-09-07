@@ -1,0 +1,62 @@
+name: Job - Coverage Check
+
+on:
+  workflow_call:
+    inputs:
+      coverage-threshold:
+        required: true
+        type: number
+        description: 'Minimum coverage threshold percentage'
+
+jobs:
+  coverage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v5
+        with:
+          name: coverage-report
+      - name: Calculate coverage
+        id: calc-coverage
+        run: |
+          if [ ! -f coverage.txt ]; then
+            echo "Error: coverage.txt file not found"
+            exit 1
+          fi
+          line_coverage=$(grep "TOTAL" coverage.txt | awk '{print $10}' | tr -d '%')
+          echo "coverage=$line_coverage" >> $GITHUB_OUTPUT
+      - name: Generate coverage report
+        run: |
+          cat << EOF > $GITHUB_STEP_SUMMARY
+          # Test Coverage Report
+
+          ## File Coverage Details
+          \`\`\`
+          $(cat coverage.txt)
+          \`\`\`
+
+          ## Coverage Status
+          EOF
+      - name: Check coverage threshold
+        run: |
+          coverage=${{ steps.calc-coverage.outputs.coverage }}
+          
+          if (( $(echo "$coverage < ${{ inputs.coverage-threshold }}" | bc -l) )); then
+            cat << EOF >> $GITHUB_STEP_SUMMARY
+          ### ⚠️ Coverage Alert
+
+          Test coverage is below required threshold:
+          - Current: $coverage%
+          - Required: ${{ inputs.coverage-threshold }}%
+          EOF
+            exit 1
+          else
+            cat << EOF >> $GITHUB_STEP_SUMMARY
+          ### ✅ Coverage Check Passed
+
+          Coverage requirements met:
+          - Current: $coverage%
+          - Required: ${{ inputs.coverage-threshold }}%
+          EOF
+          fi

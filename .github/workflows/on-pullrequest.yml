@@ -1,0 +1,24 @@
+name: On Pull Request check
+
+on:
+  pull_request:
+    branches:
+      - master
+    paths:
+      - 'src/**'
+      - 'Cargo.toml'
+      - '.github/workflows/on-pullrequest.yml'
+
+jobs:
+  lint:
+    uses: ./.github/workflows/job-lint.yml
+  small-test:
+    uses: ./.github/workflows/job-test-small.yml
+    with:
+      with-coverage: true
+  coverage:
+    needs: 
+      - small-test
+    uses: ./.github/workflows/job-coverage.yml
+    with:
+      coverage-threshold: 80
