@@ -3,6 +3,7 @@ mod cpu;
 mod decode;
 mod fetch;
 mod hram;
+mod instructions;
 mod peripherals;
 mod registers;
 mod wram;
