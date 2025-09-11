@@ -1,5 +1,6 @@
 mod bootrom;
 mod cpu;
+mod decode;
 mod fetch;
 mod hram;
 mod peripherals;
