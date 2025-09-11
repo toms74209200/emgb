@@ -1,12 +1,12 @@
 use crate::registers;
 
 #[derive(Default)]
-struct Ctx {
-    opcode: u8,
-    cb: bool,
+pub struct Ctx {
+    pub opcode: u8,
+    pub cb: bool,
 }
 
 pub struct Cpu {
-    regs: registers::Registers,
-    ctx: Ctx,
+    pub regs: registers::Registers,
+    pub ctx: Ctx,
 }
