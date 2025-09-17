@@ -34,6 +34,26 @@ pub trait IO16<T: Copy> {
     fn read16(&mut self, bus: &peripherals::Peripherals, src: T) -> Option<u16>;
     fn write16(&mut self, bus: &mut peripherals::Peripherals, dst: T, val: u16) -> Option<()>;
 }
+impl IO16<Reg16> for cpu::Cpu {
+    fn read16(&mut self, _bus: &peripherals::Peripherals, src: Reg16) -> Option<u16> {
+        Some(match src {
+            Reg16::AF => self.regs.af(),
+            Reg16::BC => self.regs.bc(),
+            Reg16::DE => self.regs.de(),
+            Reg16::HL => self.regs.hl(),
+            Reg16::SP => self.regs.sp,
+        })
+    }
+    fn write16(&mut self, _bus: &mut peripherals::Peripherals, dst: Reg16, val: u16) -> Option<()> {
+        Some(match dst {
+            Reg16::AF => self.regs.write_af(val),
+            Reg16::BC => self.regs.write_bc(val),
+            Reg16::DE => self.regs.write_de(val),
+            Reg16::HL => self.regs.write_hl(val),
+            Reg16::SP => self.regs.sp = val,
+        })
+    }
+}
 
 #[derive(Clone, Copy, Debug)]
 pub enum Reg8 {
@@ -154,5 +174,57 @@ mod tests {
         assert_eq!(cpu.regs.e, e_expected);
         assert_eq!(cpu.regs.h, f_expected);
         assert_eq!(cpu.regs.l, l_expected);
+    }
+
+    #[test]
+    fn test_io16_read() {
+        let af_expected = rand::rng().random();
+        let bc_expected = rand::rng().random();
+        let de_expected = rand::rng().random();
+        let hl_expected = rand::rng().random();
+        let sp_expected = rand::rng().random();
+        let mut cpu = cpu::Cpu {
+            regs: crate::registers::Registers::default(),
+            ctx: cpu::Ctx::default(),
+        };
+        let bootrom = crate::bootrom::Bootrom::new(vec![0; 256].into_boxed_slice());
+        let peripherals = peripherals::Peripherals::new(bootrom);
+        cpu.regs.write_af(af_expected);
+        cpu.regs.write_bc(bc_expected);
+        cpu.regs.write_de(de_expected);
+        cpu.regs.write_hl(hl_expected);
+        cpu.regs.sp = sp_expected;
+        assert_eq!(
+            cpu.read16(&peripherals, Reg16::AF),
+            Some(af_expected & 0xfff0)
+        );
+        assert_eq!(cpu.read16(&peripherals, Reg16::BC), Some(bc_expected));
+        assert_eq!(cpu.read16(&peripherals, Reg16::DE), Some(de_expected));
+        assert_eq!(cpu.read16(&peripherals, Reg16::HL), Some(hl_expected));
+        assert_eq!(cpu.read16(&peripherals, Reg16::SP), Some(sp_expected));
+    }
+    #[test]
+    fn test_io16_write() {
+        let af_expected = rand::rng().random();
+        let bc_expected = rand::rng().random();
+        let de_expected = rand::rng().random();
+        let hl_expected = rand::rng().random();
+        let sp_expected = rand::rng().random();
+        let mut cpu = cpu::Cpu {
+            regs: crate::registers::Registers::default(),
+            ctx: cpu::Ctx::default(),
+        };
+        let bootrom = crate::bootrom::Bootrom::new(vec![0; 256].into_boxed_slice());
+        let mut peripherals = peripherals::Peripherals::new(bootrom);
+        cpu.write16(&mut peripherals, Reg16::AF, af_expected);
+        cpu.write16(&mut peripherals, Reg16::BC, bc_expected);
+        cpu.write16(&mut peripherals, Reg16::DE, de_expected);
+        cpu.write16(&mut peripherals, Reg16::HL, hl_expected);
+        cpu.write16(&mut peripherals, Reg16::SP, sp_expected);
+        assert_eq!(cpu.regs.af(), af_expected & 0xfff0);
+        assert_eq!(cpu.regs.bc(), bc_expected);
+        assert_eq!(cpu.regs.de(), de_expected);
+        assert_eq!(cpu.regs.hl(), hl_expected);
+        assert_eq!(cpu.regs.sp, sp_expected);
     }
 }
