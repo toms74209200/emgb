@@ -33,11 +33,12 @@ impl IO8<Imm8> for cpu::Cpu {
     fn read8(&mut self, bus: &peripherals::Peripherals, _: Imm8) -> Option<u8> {
         static STEP: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
         static VAL8: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
         match STEP.load(std::sync::atomic::Ordering::Relaxed) {
             0 => {
                 VAL8.store(bus.read(self.regs.pc), std::sync::atomic::Ordering::Relaxed);
                 self.regs.pc = self.regs.pc.wrapping_add(1);
-                STEP.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                STEP.store(1, std::sync::atomic::Ordering::Relaxed);
                 None
             }
             1 => {
@@ -75,6 +76,42 @@ impl IO16<Reg16> for cpu::Cpu {
             Reg16::HL => self.regs.write_hl(val),
             Reg16::SP => self.regs.sp = val,
         })
+    }
+}
+impl IO16<Imm16> for cpu::Cpu {
+    fn read16(&mut self, bus: &peripherals::Peripherals, _: Imm16) -> Option<u16> {
+        static STEP: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+        static VAL8: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+        static VAL16: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(0);
+
+        match STEP.load(std::sync::atomic::Ordering::Relaxed) {
+            0 => {
+                let v = bus.read(self.regs.pc);
+                self.regs.pc = self.regs.pc.wrapping_add(1);
+                VAL8.store(v, std::sync::atomic::Ordering::Relaxed);
+                STEP.store(1, std::sync::atomic::Ordering::Relaxed);
+                None
+            }
+            1 => {
+                let v = bus.read(self.regs.pc);
+                self.regs.pc = self.regs.pc.wrapping_add(1);
+                VAL16.store(
+                    u16::from_le_bytes([VAL8.load(std::sync::atomic::Ordering::Relaxed), v]),
+                    std::sync::atomic::Ordering::Relaxed,
+                );
+                STEP.store(2, std::sync::atomic::Ordering::Relaxed);
+                None
+            }
+            2 => {
+                STEP.store(0, std::sync::atomic::Ordering::Relaxed);
+                Some(VAL16.load(std::sync::atomic::Ordering::Relaxed))
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    fn write16(&mut self, _: &mut peripherals::Peripherals, _: Imm16, _: u16) -> Option<()> {
+        unreachable!()
     }
 }
 
@@ -267,5 +304,25 @@ mod tests {
         assert_eq!(cpu.regs.de(), de_expected);
         assert_eq!(cpu.regs.hl(), hl_expected);
         assert_eq!(cpu.regs.sp, sp_expected);
+    }
+    #[test]
+    fn test_io16_read_imm() {
+        let lo = rand::rng().random();
+        let hi = rand::rng().random();
+        let val_expected = u16::from_le_bytes([lo, hi]);
+        let mut cpu = cpu::Cpu {
+            regs: crate::registers::Registers::default(),
+            ctx: cpu::Ctx::default(),
+        };
+        let mut bootrom_data = vec![0; 256];
+        bootrom_data[0] = lo;
+        bootrom_data[1] = hi;
+        let bootrom = crate::bootrom::Bootrom::new(bootrom_data.into_boxed_slice());
+        let peripherals = peripherals::Peripherals::new(bootrom);
+        cpu.regs.pc = 0;
+        assert_eq!(cpu.read16(&peripherals, Imm16), None);
+        assert_eq!(cpu.read16(&peripherals, Imm16), None);
+        assert_eq!(cpu.read16(&peripherals, Imm16), Some(val_expected));
+        assert_eq!(cpu.regs.pc, 2);
     }
 }
