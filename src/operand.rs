@@ -29,6 +29,29 @@ impl IO8<Reg8> for cpu::Cpu {
         })
     }
 }
+impl IO8<Imm8> for cpu::Cpu {
+    fn read8(&mut self, bus: &peripherals::Peripherals, _: Imm8) -> Option<u8> {
+        static STEP: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+        static VAL8: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+        match STEP.load(std::sync::atomic::Ordering::Relaxed) {
+            0 => {
+                VAL8.store(bus.read(self.regs.pc), std::sync::atomic::Ordering::Relaxed);
+                self.regs.pc = self.regs.pc.wrapping_add(1);
+                STEP.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                None
+            }
+            1 => {
+                STEP.store(0, std::sync::atomic::Ordering::Relaxed);
+                Some(VAL8.load(std::sync::atomic::Ordering::Relaxed))
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    fn write8(&mut self, _: &mut peripherals::Peripherals, _: Imm8, _: u8) -> Option<()> {
+        unreachable!()
+    }
+}
 
 pub trait IO16<T: Copy> {
     fn read16(&mut self, bus: &peripherals::Peripherals, src: T) -> Option<u16>;
@@ -203,6 +226,24 @@ mod tests {
         assert_eq!(cpu.read16(&peripherals, Reg16::HL), Some(hl_expected));
         assert_eq!(cpu.read16(&peripherals, Reg16::SP), Some(sp_expected));
     }
+
+    #[test]
+    fn test_io8_read_imm() {
+        let val_expected = rand::rng().random();
+        let mut cpu = cpu::Cpu {
+            regs: crate::registers::Registers::default(),
+            ctx: cpu::Ctx::default(),
+        };
+        let mut bootrom_data = vec![0; 256];
+        bootrom_data[0] = val_expected;
+        let bootrom = crate::bootrom::Bootrom::new(bootrom_data.into_boxed_slice());
+        let peripherals = peripherals::Peripherals::new(bootrom);
+        cpu.regs.pc = 0;
+        assert_eq!(cpu.read8(&peripherals, Imm8), None);
+        assert_eq!(cpu.read8(&peripherals, Imm8), Some(val_expected));
+        assert_eq!(cpu.regs.pc, 1);
+    }
+
     #[test]
     fn test_io16_write() {
         let af_expected = rand::rng().random();
