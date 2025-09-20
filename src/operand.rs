@@ -53,6 +53,75 @@ impl IO8<Imm8> for cpu::Cpu {
         unreachable!()
     }
 }
+impl IO8<Indirect> for cpu::Cpu {
+    fn read8(&mut self, bus: &peripherals::Peripherals, src: Indirect) -> Option<u8> {
+        static STEP: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+        static VAL8: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+        match STEP.load(std::sync::atomic::Ordering::Relaxed) {
+            0 => {
+                VAL8.store(
+                    match src {
+                        Indirect::BC => bus.read(self.regs.bc()),
+                        Indirect::DE => bus.read(self.regs.de()),
+                        Indirect::HL => bus.read(self.regs.hl()),
+                        Indirect::CFF => bus.read(0xff00 | self.regs.c as u16),
+                        Indirect::HLD => {
+                            let addr = self.regs.hl();
+                            self.regs.write_hl(addr.wrapping_sub(1));
+                            bus.read(addr)
+                        }
+                        Indirect::HLI => {
+                            let addr = self.regs.hl();
+                            self.regs.write_hl(addr.wrapping_add(1));
+                            bus.read(addr)
+                        }
+                    },
+                    std::sync::atomic::Ordering::Relaxed,
+                );
+                STEP.store(1, std::sync::atomic::Ordering::Relaxed);
+                None
+            }
+            1 => {
+                STEP.store(0, std::sync::atomic::Ordering::Relaxed);
+                Some(VAL8.load(std::sync::atomic::Ordering::Relaxed))
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    fn write8(&mut self, bus: &mut peripherals::Peripherals, dst: Indirect, val: u8) -> Option<()> {
+        static STEP: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+        match STEP.load(std::sync::atomic::Ordering::Relaxed) {
+            0 => {
+                match dst {
+                    Indirect::BC => bus.write(self.regs.bc(), val),
+                    Indirect::DE => bus.write(self.regs.de(), val),
+                    Indirect::HL => bus.write(self.regs.hl(), val),
+                    Indirect::CFF => bus.write(0xff00 | self.regs.c as u16, val),
+                    Indirect::HLD => {
+                        let addr = self.regs.hl();
+                        self.regs.write_hl(addr.wrapping_sub(1));
+                        bus.write(addr, val);
+                    }
+                    Indirect::HLI => {
+                        let addr = self.regs.hl();
+                        self.regs.write_hl(addr.wrapping_add(1));
+                        bus.write(addr, val);
+                    }
+                }
+                STEP.store(1, std::sync::atomic::Ordering::Relaxed);
+                None
+            }
+            1 => {
+                STEP.store(0, std::sync::atomic::Ordering::Relaxed);
+                Some(())
+            }
+            _ => unreachable!(),
+        }
+    }
+}
 
 pub trait IO16<T: Copy> {
     fn read16(&mut self, bus: &peripherals::Peripherals, src: T) -> Option<u16>;
@@ -142,7 +211,7 @@ pub enum Indirect {
     BC,
     DE,
     HL,
-    CEF,
+    CFF,
     HLD,
     HLI,
 }
@@ -237,6 +306,66 @@ mod tests {
     }
 
     #[test]
+    fn test_io8_read_imm() {
+        let val_expected = rand::rng().random();
+        let mut cpu = cpu::Cpu {
+            regs: crate::registers::Registers::default(),
+            ctx: cpu::Ctx::default(),
+        };
+        let mut bootrom_data = vec![0; 256];
+        bootrom_data[0] = val_expected;
+        let bootrom = crate::bootrom::Bootrom::new(bootrom_data.into_boxed_slice());
+        let peripherals = peripherals::Peripherals::new(bootrom);
+        cpu.regs.pc = 0;
+        assert_eq!(cpu.read8(&peripherals, Imm8), None);
+        assert_eq!(cpu.read8(&peripherals, Imm8), Some(val_expected));
+        assert_eq!(cpu.regs.pc, 1);
+    }
+
+    #[test]
+    fn test_io8_read_indirect() {
+        let addr = rand::rng().random_range(0xc000..0xfdff);
+        let val_expected = rand::rng().random();
+        let mut cpu = cpu::Cpu {
+            regs: crate::registers::Registers::default(),
+            ctx: cpu::Ctx::default(),
+        };
+        let mut bootrom = vec![0; 256];
+        bootrom[0] = 0;
+        let mut bootrom = crate::bootrom::Bootrom::new(bootrom.into_boxed_slice());
+        bootrom.write(addr, val_expected);
+        let mut peripherals = peripherals::Peripherals::new(bootrom);
+        peripherals.write(addr, val_expected);
+        cpu.regs.write_hl(addr);
+        assert_eq!(cpu.read8(&peripherals, Indirect::HL), None);
+        assert_eq!(cpu.read8(&peripherals, Indirect::HL), Some(val_expected));
+    }
+
+    #[test]
+    fn test_io8_write_indirect() {
+        let addr = rand::rng().random_range(0xc000..0xfdff);
+        let val_expected = rand::rng().random();
+        let mut cpu = cpu::Cpu {
+            regs: crate::registers::Registers::default(),
+            ctx: cpu::Ctx::default(),
+        };
+        let mut bootrom = vec![0; 256];
+        bootrom[0] = 0;
+        let bootrom = crate::bootrom::Bootrom::new(bootrom.into_boxed_slice());
+        let mut peripherals = peripherals::Peripherals::new(bootrom);
+        cpu.regs.write_hl(addr);
+        assert_eq!(
+            cpu.write8(&mut peripherals, Indirect::HL, val_expected),
+            None
+        );
+        assert_eq!(
+            cpu.write8(&mut peripherals, Indirect::HL, val_expected),
+            Some(())
+        );
+        assert_eq!(peripherals.read(addr), val_expected);
+    }
+
+    #[test]
     fn test_io16_read() {
         let af_expected = rand::rng().random();
         let bc_expected = rand::rng().random();
@@ -262,23 +391,6 @@ mod tests {
         assert_eq!(cpu.read16(&peripherals, Reg16::DE), Some(de_expected));
         assert_eq!(cpu.read16(&peripherals, Reg16::HL), Some(hl_expected));
         assert_eq!(cpu.read16(&peripherals, Reg16::SP), Some(sp_expected));
-    }
-
-    #[test]
-    fn test_io8_read_imm() {
-        let val_expected = rand::rng().random();
-        let mut cpu = cpu::Cpu {
-            regs: crate::registers::Registers::default(),
-            ctx: cpu::Ctx::default(),
-        };
-        let mut bootrom_data = vec![0; 256];
-        bootrom_data[0] = val_expected;
-        let bootrom = crate::bootrom::Bootrom::new(bootrom_data.into_boxed_slice());
-        let peripherals = peripherals::Peripherals::new(bootrom);
-        cpu.regs.pc = 0;
-        assert_eq!(cpu.read8(&peripherals, Imm8), None);
-        assert_eq!(cpu.read8(&peripherals, Imm8), Some(val_expected));
-        assert_eq!(cpu.regs.pc, 1);
     }
 
     #[test]
