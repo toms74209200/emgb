@@ -167,7 +167,50 @@ impl IO8<Direct8> for cpu::Cpu {
     }
 
     fn write8(&mut self, bus: &mut peripherals::Peripherals, dst: Direct8, val: u8) -> Option<()> {
-        todo!()
+        static STEP: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+        static VAL8: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+        static VAL16: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(0);
+
+        match STEP.load(std::sync::atomic::Ordering::Relaxed) {
+            0 => {
+                if let Some(lo) = self.read8(bus, Imm8) {
+                    VAL8.store(lo, std::sync::atomic::Ordering::Relaxed);
+                    STEP.store(1, std::sync::atomic::Ordering::Relaxed);
+                    if let Direct8::DFE = dst {
+                        VAL16.store(0xff00 | (lo as u16), std::sync::atomic::Ordering::Relaxed);
+                        STEP.store(2, std::sync::atomic::Ordering::Relaxed);
+                    }
+                }
+                None
+            }
+            1 => {
+                if let Some(hi) = self.read8(bus, Imm8) {
+                    VAL16.store(
+                        u16::from_le_bytes([VAL8.load(std::sync::atomic::Ordering::Relaxed), hi]),
+                        std::sync::atomic::Ordering::Relaxed,
+                    );
+                    STEP.store(2, std::sync::atomic::Ordering::Relaxed);
+                }
+                None
+            }
+            2 => {
+                bus.write(VAL16.load(std::sync::atomic::Ordering::Relaxed), val);
+                STEP.store(3, std::sync::atomic::Ordering::Relaxed);
+                None
+            }
+            3 => {
+                bus.write(
+                    VAL16
+                        .load(std::sync::atomic::Ordering::Relaxed)
+                        .wrapping_add(1),
+                    val.checked_shr(8).unwrap_or(0),
+                );
+                STEP.store(4, std::sync::atomic::Ordering::Relaxed);
+                None
+            }
+            4 => Some(STEP.store(0, std::sync::atomic::Ordering::Relaxed)),
+            _ => unreachable!(),
+        }
     }
 }
 
@@ -436,6 +479,34 @@ mod tests {
         assert_eq!(cpu.read8(&peripherals, Direct8::D), None);
         assert_eq!(cpu.read8(&peripherals, Direct8::D), Some(val_expected));
         assert_eq!(cpu.regs.pc, 2);
+    }
+    #[test]
+    fn test_io8_write_direct() {
+        let lo = rand::rng().random();
+        let addr = u16::from_le_bytes([lo, 0xc0]);
+        let val_expected = rand::rng().random();
+        let mut cpu = cpu::Cpu {
+            regs: crate::registers::Registers::default(),
+            ctx: cpu::Ctx::default(),
+        };
+        let mut bootrom_data = vec![0; 256];
+        bootrom_data[0] = lo;
+        bootrom_data[1] = 0xc0;
+        let bootrom = crate::bootrom::Bootrom::new(bootrom_data.into_boxed_slice());
+        let mut peripherals = peripherals::Peripherals::new(bootrom);
+        cpu.regs.pc = 0;
+        assert_eq!(cpu.write8(&mut peripherals, Direct8::D, val_expected), None);
+        assert_eq!(cpu.write8(&mut peripherals, Direct8::D, val_expected), None);
+        assert_eq!(cpu.write8(&mut peripherals, Direct8::D, val_expected), None);
+        assert_eq!(cpu.write8(&mut peripherals, Direct8::D, val_expected), None);
+        assert_eq!(cpu.write8(&mut peripherals, Direct8::D, val_expected), None);
+        assert_eq!(cpu.write8(&mut peripherals, Direct8::D, val_expected), None);
+        assert_eq!(
+            cpu.write8(&mut peripherals, Direct8::D, val_expected),
+            Some(())
+        );
+        assert_eq!(cpu.regs.pc, 2);
+        assert_eq!(peripherals.read(addr), val_expected);
     }
 
     #[test]
