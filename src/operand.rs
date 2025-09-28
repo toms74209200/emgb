@@ -275,6 +275,55 @@ impl IO16<Imm16> for cpu::Cpu {
     }
 }
 
+impl IO16<Direct16> for cpu::Cpu {
+    fn read16(&mut self, _: &peripherals::Peripherals, _: Direct16) -> Option<u16> {
+        unreachable!()
+    }
+
+    fn write16(&mut self, bus: &mut peripherals::Peripherals, _: Direct16, val: u16) -> Option<()> {
+        static STEP: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+        static VAL8: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+        static VAL16: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(0);
+
+        match STEP.load(std::sync::atomic::Ordering::Relaxed) {
+            0 => {
+                if let Some(lo) = self.read8(bus, Imm8) {
+                    VAL8.store(lo, std::sync::atomic::Ordering::Relaxed);
+                    STEP.store(1, std::sync::atomic::Ordering::Relaxed);
+                }
+                None
+            }
+            1 => {
+                if let Some(hi) = self.read8(bus, Imm8) {
+                    VAL16.store(
+                        u16::from_le_bytes([VAL8.load(std::sync::atomic::Ordering::Relaxed), hi]),
+                        std::sync::atomic::Ordering::Relaxed,
+                    );
+                    STEP.store(2, std::sync::atomic::Ordering::Relaxed);
+                }
+                None
+            }
+            2 => {
+                bus.write(VAL16.load(std::sync::atomic::Ordering::Relaxed), val as u8);
+                STEP.store(3, std::sync::atomic::Ordering::Relaxed);
+                None
+            }
+            3 => {
+                bus.write(
+                    VAL16
+                        .load(std::sync::atomic::Ordering::Relaxed)
+                        .wrapping_add(1),
+                    (val >> 8) as u8,
+                );
+                STEP.store(4, std::sync::atomic::Ordering::Relaxed);
+                None
+            }
+            4 => Some(STEP.store(0, std::sync::atomic::Ordering::Relaxed)),
+            _ => unreachable!(),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub enum Reg8 {
     A,
@@ -580,5 +629,27 @@ mod tests {
         assert_eq!(cpu.read16(&peripherals, Imm16), None);
         assert_eq!(cpu.read16(&peripherals, Imm16), Some(val_expected));
         assert_eq!(cpu.regs.pc, 2);
+    }
+
+    #[test]
+    fn test_io16_write_direct() {
+        let lo = rand::rng().random();
+        let hi = rand::rng().random();
+        let val_expected = rand::rng().random();
+        let mut cpu = cpu::Cpu {
+            regs: crate::registers::Registers::default(),
+            ctx: cpu::Ctx::default(),
+        };
+        let mut bootrom_data = vec![0; 256];
+        bootrom_data[0] = lo;
+        bootrom_data[1] = hi;
+        let bootrom = crate::bootrom::Bootrom::new(bootrom_data.into_boxed_slice());
+        let mut peripherals = peripherals::Peripherals::new(bootrom);
+        cpu.regs.pc = 0;
+        assert_eq!(cpu.write16(&mut peripherals, Direct16, val_expected), None);
+        assert_eq!(cpu.write16(&mut peripherals, Direct16, val_expected), None);
+        assert_eq!(cpu.write16(&mut peripherals, Direct16, val_expected), None);
+        assert_eq!(cpu.write16(&mut peripherals, Direct16, val_expected), None);
+        assert_eq!(cpu.write16(&mut peripherals, Direct16, val_expected), None);
     }
 }
