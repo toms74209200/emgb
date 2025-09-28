@@ -4,6 +4,7 @@ mod decode;
 mod fetch;
 mod hram;
 mod instructions;
+mod operand;
 mod peripherals;
 mod registers;
 mod wram;
