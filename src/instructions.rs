@@ -1,5 +1,5 @@
 use crate::cpu;
-use crate::operand::IO8;
+use crate::operand::{IO8, IO16};
 use crate::peripherals;
 
 impl cpu::Cpu {
@@ -23,6 +23,36 @@ impl cpu::Cpu {
             1 => {
                 if self
                     .write8(bus, dst, VAL8.load(std::sync::atomic::Ordering::Relaxed))
+                    .is_some()
+                {
+                    STEP.store(2, std::sync::atomic::Ordering::Relaxed);
+                }
+            }
+            2 => {
+                STEP.store(0, std::sync::atomic::Ordering::Relaxed);
+                self.fetch(bus);
+            }
+            _ => unreachable!(),
+        }
+    }
+    pub fn ld16<D: Copy, S: Copy>(&mut self, bus: &mut peripherals::Peripherals, dst: D, src: S)
+    where
+        Self: crate::operand::IO16<D> + IO16<S>,
+    {
+        static STEP: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+        static VAL16: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(0);
+
+        match STEP.load(std::sync::atomic::Ordering::Relaxed) {
+            0 => {
+                if let Some(v) = self.read16(bus, src) {
+                    self.regs.pc = self.regs.pc.wrapping_add(1);
+                    VAL16.store(v, std::sync::atomic::Ordering::Relaxed);
+                    STEP.store(1, std::sync::atomic::Ordering::Relaxed);
+                }
+            }
+            1 => {
+                if self
+                    .write16(bus, dst, VAL16.load(std::sync::atomic::Ordering::Relaxed))
                     .is_some()
                 {
                     STEP.store(2, std::sync::atomic::Ordering::Relaxed);
@@ -84,5 +114,32 @@ mod tests {
         );
 
         assert_eq!(cpu.regs.a, 0x42);
+    }
+
+    #[test]
+    fn test_ld16() {
+        let mut cpu = cpu::Cpu {
+            regs: crate::registers::Registers::default(),
+            ctx: cpu::Ctx::default(),
+        };
+        let mut bootrom_data = Vec::new();
+        for _ in 0..128 {
+            bootrom_data.push(0x34);
+            bootrom_data.push(0x12);
+        }
+        let bootrom = crate::bootrom::Bootrom::new(bootrom_data.into_boxed_slice());
+        let mut peripherals = peripherals::Peripherals::new(bootrom);
+
+        cpu.regs.pc = 0;
+
+        for _ in 0..5 {
+            cpu.ld16(
+                &mut peripherals,
+                crate::operand::Reg16::BC,
+                crate::operand::Imm16,
+            );
+        }
+
+        assert_eq!(cpu.regs.bc(), 0x1234);
     }
 }
