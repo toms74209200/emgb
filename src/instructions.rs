@@ -65,6 +65,19 @@ impl cpu::Cpu {
             _ => unreachable!(),
         }
     }
+    pub fn cp<S: Copy>(&mut self, bus: &peripherals::Peripherals, src: S)
+    where
+        Self: IO8<S>,
+    {
+        if let Some(v) = self.read8(bus, src) {
+            let (result, carry) = self.regs.a.overflowing_sub(v);
+            self.regs.set_zf(result == 0);
+            self.regs.set_nf(true);
+            self.regs.set_hf((self.regs.a & 0x0f) < (v & 0x0f));
+            self.regs.set_cf(carry);
+            self.fetch(bus);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -141,5 +154,77 @@ mod tests {
         }
 
         assert_eq!(cpu.regs.bc(), 0x1234);
+    }
+
+    #[test]
+    fn test_cp() {
+        let mut cpu = cpu::Cpu {
+            regs: crate::registers::Registers::default(),
+            ctx: cpu::Ctx::default(),
+        };
+        let bootrom = crate::bootrom::Bootrom::new(vec![0x42; 256].into_boxed_slice());
+        let peripherals = peripherals::Peripherals::new(bootrom);
+
+        cpu.regs.pc = 0;
+        cpu.regs.a = 0x50;
+
+        for _ in 0..3 {
+            cpu.cp(&peripherals, crate::operand::Imm8);
+            if cpu.regs.nf() {
+                break;
+            }
+        }
+        assert!(!cpu.regs.zf());
+        assert!(cpu.regs.nf());
+        assert!(cpu.regs.hf());
+        assert!(!cpu.regs.cf());
+    }
+
+    #[test]
+    fn test_cp_equal() {
+        let mut cpu = cpu::Cpu {
+            regs: crate::registers::Registers::default(),
+            ctx: cpu::Ctx::default(),
+        };
+        let bootrom = crate::bootrom::Bootrom::new(vec![0x42; 256].into_boxed_slice());
+        let peripherals = peripherals::Peripherals::new(bootrom);
+
+        cpu.regs.pc = 0;
+        cpu.regs.a = 0x42;
+
+        for _ in 0..3 {
+            cpu.cp(&peripherals, crate::operand::Imm8);
+            if cpu.regs.zf() {
+                break;
+            }
+        }
+        assert!(cpu.regs.zf());
+        assert!(cpu.regs.nf());
+        assert!(!cpu.regs.hf());
+        assert!(!cpu.regs.cf());
+    }
+
+    #[test]
+    fn test_cp_underflow() {
+        let mut cpu = cpu::Cpu {
+            regs: crate::registers::Registers::default(),
+            ctx: cpu::Ctx::default(),
+        };
+        let bootrom = crate::bootrom::Bootrom::new(vec![0x42; 256].into_boxed_slice());
+        let peripherals = peripherals::Peripherals::new(bootrom);
+
+        cpu.regs.pc = 0;
+        cpu.regs.a = 0x30;
+
+        for _ in 0..3 {
+            cpu.cp(&peripherals, crate::operand::Imm8);
+            if cpu.regs.cf() {
+                break;
+            }
+        }
+        assert!(!cpu.regs.zf());
+        assert!(cpu.regs.nf());
+        assert!(cpu.regs.hf());
+        assert!(cpu.regs.cf());
     }
 }
