@@ -196,6 +196,37 @@ impl cpu::Cpu {
             _ => unreachable!(),
         }
     }
+    pub fn rl<S: Copy>(&mut self, bus: &mut peripherals::Peripherals, src: S)
+    where
+        Self: IO8<S>,
+    {
+        static STEP: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+        static VAL8: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+        match STEP.load(std::sync::atomic::Ordering::Relaxed) {
+            0 => {
+                if let Some(v) = self.read8(bus, src) {
+                    let result = (v << 1) | self.regs.cf() as u8;
+                    self.regs.set_zf(result == 0);
+                    self.regs.set_nf(false);
+                    self.regs.set_hf(false);
+                    self.regs.set_cf(v & 0x80 > 0);
+                    VAL8.store(result, std::sync::atomic::Ordering::Relaxed);
+                    STEP.store(1, std::sync::atomic::Ordering::Relaxed);
+                }
+            }
+            1 => {
+                if self
+                    .write8(bus, src, VAL8.load(std::sync::atomic::Ordering::Relaxed))
+                    .is_some()
+                {
+                    STEP.store(0, std::sync::atomic::Ordering::Relaxed);
+                    self.fetch(bus);
+                }
+            }
+            _ => unreachable!(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -580,5 +611,74 @@ mod tests {
         cpu.dec16(&mut peripherals, crate::operand::Reg16::BC);
 
         assert_eq!(cpu.regs.bc(), 0xFFFF);
+    }
+
+    #[test]
+    fn test_rl() {
+        let mut cpu = cpu::Cpu {
+            regs: crate::registers::Registers::default(),
+            ctx: cpu::Ctx::default(),
+        };
+        let bootrom = crate::bootrom::Bootrom::new(vec![0x42; 256].into_boxed_slice());
+        let mut peripherals = peripherals::Peripherals::new(bootrom);
+
+        cpu.regs.pc = 0;
+        cpu.regs.b = 0x7F;
+        cpu.regs.set_cf(false);
+
+        cpu.rl(&mut peripherals, crate::operand::Reg8::B);
+        cpu.rl(&mut peripherals, crate::operand::Reg8::B);
+
+        assert_eq!(cpu.regs.b, 0xFE);
+        assert!(!cpu.regs.zf());
+        assert!(!cpu.regs.nf());
+        assert!(!cpu.regs.hf());
+        assert!(!cpu.regs.cf());
+    }
+
+    #[test]
+    fn test_rl_with_carry() {
+        let mut cpu = cpu::Cpu {
+            regs: crate::registers::Registers::default(),
+            ctx: cpu::Ctx::default(),
+        };
+        let bootrom = crate::bootrom::Bootrom::new(vec![0x42; 256].into_boxed_slice());
+        let mut peripherals = peripherals::Peripherals::new(bootrom);
+
+        cpu.regs.pc = 0;
+        cpu.regs.b = 0x80;
+        cpu.regs.set_cf(true);
+
+        cpu.rl(&mut peripherals, crate::operand::Reg8::B);
+        cpu.rl(&mut peripherals, crate::operand::Reg8::B);
+
+        assert_eq!(cpu.regs.b, 0x01);
+        assert!(!cpu.regs.zf());
+        assert!(!cpu.regs.nf());
+        assert!(!cpu.regs.hf());
+        assert!(cpu.regs.cf());
+    }
+
+    #[test]
+    fn test_rl_zero_flag() {
+        let mut cpu = cpu::Cpu {
+            regs: crate::registers::Registers::default(),
+            ctx: cpu::Ctx::default(),
+        };
+        let bootrom = crate::bootrom::Bootrom::new(vec![0x42; 256].into_boxed_slice());
+        let mut peripherals = peripherals::Peripherals::new(bootrom);
+
+        cpu.regs.pc = 0;
+        cpu.regs.b = 0x80;
+        cpu.regs.set_cf(false);
+
+        cpu.rl(&mut peripherals, crate::operand::Reg8::B);
+        cpu.rl(&mut peripherals, crate::operand::Reg8::B);
+
+        assert_eq!(cpu.regs.b, 0x00);
+        assert!(cpu.regs.zf());
+        assert!(!cpu.regs.nf());
+        assert!(!cpu.regs.hf());
+        assert!(cpu.regs.cf());
     }
 }
