@@ -227,6 +227,18 @@ impl cpu::Cpu {
             _ => unreachable!(),
         }
     }
+    pub fn bit<S: Copy>(&mut self, bus: &peripherals::Peripherals, bit: u8, src: S)
+    where
+        Self: IO8<S>,
+    {
+        if let Some(mut v) = self.read8(bus, src) {
+            v &= 1 << bit;
+            self.regs.set_zf(v == 0);
+            self.regs.set_nf(false);
+            self.regs.set_hf(true);
+            self.fetch(bus);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -680,5 +692,77 @@ mod tests {
         assert!(!cpu.regs.nf());
         assert!(!cpu.regs.hf());
         assert!(cpu.regs.cf());
+    }
+
+    #[test]
+    fn test_bit() {
+        let mut cpu = cpu::Cpu {
+            regs: crate::registers::Registers::default(),
+            ctx: cpu::Ctx::default(),
+        };
+        let bootrom = crate::bootrom::Bootrom::new(vec![0x42; 256].into_boxed_slice());
+        let peripherals = peripherals::Peripherals::new(bootrom);
+
+        cpu.regs.pc = 0;
+        cpu.regs.b = 0b0100_0010;
+
+        cpu.bit(&peripherals, 6, crate::operand::Reg8::B);
+        assert!(!cpu.regs.zf());
+        assert!(!cpu.regs.nf());
+        assert!(cpu.regs.hf());
+
+        cpu.bit(&peripherals, 5, crate::operand::Reg8::B);
+        assert!(cpu.regs.zf());
+        assert!(!cpu.regs.nf());
+        assert!(cpu.regs.hf());
+    }
+
+    #[test]
+    fn test_bit_all_positions() {
+        let mut cpu = cpu::Cpu {
+            regs: crate::registers::Registers::default(),
+            ctx: cpu::Ctx::default(),
+        };
+        let bootrom = crate::bootrom::Bootrom::new(vec![0x42; 256].into_boxed_slice());
+        let peripherals = peripherals::Peripherals::new(bootrom);
+
+        cpu.regs.pc = 0;
+        cpu.regs.a = 0b1010_1010;
+
+        for bit in 0..8 {
+            let expected_set = (cpu.regs.a >> bit) & 1 == 1;
+            cpu.bit(&peripherals, bit, crate::operand::Reg8::A);
+
+            if expected_set {
+                assert!(!cpu.regs.zf(), "Bit {} should be set", bit);
+            } else {
+                assert!(cpu.regs.zf(), "Bit {} should be clear", bit);
+            }
+            assert!(!cpu.regs.nf());
+            assert!(cpu.regs.hf());
+        }
+    }
+
+    #[test]
+    fn test_bit_carry_unchanged() {
+        let mut cpu = cpu::Cpu {
+            regs: crate::registers::Registers::default(),
+            ctx: cpu::Ctx::default(),
+        };
+        let bootrom = crate::bootrom::Bootrom::new(vec![0x42; 256].into_boxed_slice());
+        let peripherals = peripherals::Peripherals::new(bootrom);
+
+        cpu.regs.pc = 0;
+        cpu.regs.b = 0xFF;
+
+        cpu.regs.set_cf(true);
+
+        cpu.bit(&peripherals, 7, crate::operand::Reg8::B);
+        assert!(cpu.regs.cf());
+
+        cpu.regs.set_cf(false);
+
+        cpu.bit(&peripherals, 0, crate::operand::Reg8::B);
+        assert!(!cpu.regs.cf());
     }
 }
