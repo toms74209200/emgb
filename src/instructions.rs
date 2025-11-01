@@ -239,6 +239,37 @@ impl cpu::Cpu {
             self.fetch(bus);
         }
     }
+    pub fn push16(&mut self, bus: &mut peripherals::Peripherals, val: u16) -> Option<()> {
+        static STEP: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+        static VAL8: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+        match STEP.load(std::sync::atomic::Ordering::Relaxed) {
+            0 => {
+                STEP.store(1, std::sync::atomic::Ordering::Relaxed);
+                None
+            }
+            1 => {
+                let [lo, hi] = u16::to_le_bytes(val);
+                self.regs.sp = self.regs.sp.wrapping_sub(1);
+                bus.write(self.regs.sp, hi);
+                VAL8.store(lo, std::sync::atomic::Ordering::Relaxed);
+                STEP.store(2, std::sync::atomic::Ordering::Relaxed);
+                return None;
+            }
+            2 => {
+                self.regs.sp = self.regs.sp.wrapping_sub(1);
+                bus.write(
+                    self.regs.sp,
+                    VAL8.load(std::sync::atomic::Ordering::Relaxed),
+                );
+                STEP.store(3, std::sync::atomic::Ordering::Relaxed);
+                return None;
+            }
+            3 => {
+                return Some(STEP.store(0, std::sync::atomic::Ordering::Relaxed));
+            }
+            _ => unreachable!(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -764,5 +795,92 @@ mod tests {
 
         cpu.bit(&peripherals, 0, crate::operand::Reg8::B);
         assert!(!cpu.regs.cf());
+    }
+
+    #[test]
+    fn test_push16() {
+        let mut cpu = cpu::Cpu {
+            regs: crate::registers::Registers::default(),
+            ctx: cpu::Ctx::default(),
+        };
+        let bootrom = crate::bootrom::Bootrom::new(vec![0x00; 256].into_boxed_slice());
+        let mut peripherals = peripherals::Peripherals::new(bootrom);
+
+        cpu.regs.sp = 0xFFFE;
+
+        let val = 0x1234;
+
+        cpu.push16(&mut peripherals, val);
+        cpu.push16(&mut peripherals, val);
+        cpu.push16(&mut peripherals, val);
+        cpu.push16(&mut peripherals, val);
+
+        let lo = peripherals.read(0xFFFC);
+        let hi = peripherals.read(0xFFFD);
+        let pushed_val = u16::from_le_bytes([lo, hi]);
+
+        assert_eq!(pushed_val, val);
+        assert_eq!(cpu.regs.sp, 0xFFFC);
+    }
+
+    #[test]
+    fn test_push16_register() {
+        let mut cpu = cpu::Cpu {
+            regs: crate::registers::Registers::default(),
+            ctx: cpu::Ctx::default(),
+        };
+        let bootrom = crate::bootrom::Bootrom::new(vec![0x00; 256].into_boxed_slice());
+        let mut peripherals = peripherals::Peripherals::new(bootrom);
+
+        cpu.regs.sp = 0xFFFE;
+        cpu.regs.write_bc(0x5678);
+
+        cpu.push16(&mut peripherals, cpu.regs.bc());
+        cpu.push16(&mut peripherals, cpu.regs.bc());
+        cpu.push16(&mut peripherals, cpu.regs.bc());
+        cpu.push16(&mut peripherals, cpu.regs.bc());
+
+        let lo = peripherals.read(0xFFFC);
+        let hi = peripherals.read(0xFFFD);
+        let pushed_val = u16::from_le_bytes([lo, hi]);
+
+        assert_eq!(pushed_val, 0x5678);
+        assert_eq!(cpu.regs.sp, 0xFFFC);
+    }
+
+    #[test]
+    fn test_push16_multiple() {
+        let mut cpu = cpu::Cpu {
+            regs: crate::registers::Registers::default(),
+            ctx: cpu::Ctx::default(),
+        };
+        let bootrom = crate::bootrom::Bootrom::new(vec![0x00; 256].into_boxed_slice());
+        let mut peripherals = peripherals::Peripherals::new(bootrom);
+
+        cpu.regs.sp = 0xFFFE;
+
+        let val1 = 0x1234;
+        cpu.push16(&mut peripherals, val1);
+        cpu.push16(&mut peripherals, val1);
+        cpu.push16(&mut peripherals, val1);
+        cpu.push16(&mut peripherals, val1);
+
+        let val2 = 0x5678;
+        cpu.push16(&mut peripherals, val2);
+        cpu.push16(&mut peripherals, val2);
+        cpu.push16(&mut peripherals, val2);
+        cpu.push16(&mut peripherals, val2);
+
+        let lo2 = peripherals.read(0xFFFA);
+        let hi2 = peripherals.read(0xFFFB);
+        let pushed_val2 = u16::from_le_bytes([lo2, hi2]);
+
+        let lo1 = peripherals.read(0xFFFC);
+        let hi1 = peripherals.read(0xFFFD);
+        let pushed_val1 = u16::from_le_bytes([lo1, hi1]);
+
+        assert_eq!(pushed_val1, val1);
+        assert_eq!(pushed_val2, val2);
+        assert_eq!(cpu.regs.sp, 0xFFFA);
     }
 }
