@@ -324,6 +324,12 @@ impl cpu::Cpu {
             _ => unreachable!(),
         }
     }
+    pub fn pop(&mut self, bus: &mut peripherals::Peripherals, dst: Reg16) {
+        if let Some(v) = self.pop16(bus) {
+            self.write16(bus, dst, v);
+            self.fetch(bus);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1030,5 +1036,95 @@ mod tests {
         assert_eq!(cpu.pop16(&peripherals), None);
         assert_eq!(cpu.pop16(&peripherals), Some(0x00FF));
         assert_eq!(cpu.regs.sp, 0xFFFE);
+    }
+
+    #[test]
+    fn test_pop() {
+        let mut cpu = cpu::Cpu {
+            regs: crate::registers::Registers::default(),
+            ctx: cpu::Ctx::default(),
+        };
+        let bootrom = crate::bootrom::Bootrom::new(vec![0x00; 256].into_boxed_slice());
+        let mut peripherals = peripherals::Peripherals::new(bootrom);
+
+        cpu.regs.sp = 0xFFFC;
+        peripherals.write(0xFFFC, 0x34);
+        peripherals.write(0xFFFD, 0x12);
+
+        cpu.pop(&mut peripherals, Reg16::BC);
+        cpu.pop(&mut peripherals, Reg16::BC);
+        cpu.pop(&mut peripherals, Reg16::BC);
+
+        assert_eq!(cpu.regs.bc(), 0x1234);
+        assert_eq!(cpu.regs.sp, 0xFFFE);
+    }
+
+    #[test]
+    fn test_pop_different_registers() {
+        let mut cpu = cpu::Cpu {
+            regs: crate::registers::Registers::default(),
+            ctx: cpu::Ctx::default(),
+        };
+        let bootrom = crate::bootrom::Bootrom::new(vec![0x00; 256].into_boxed_slice());
+        let mut peripherals = peripherals::Peripherals::new(bootrom);
+
+        cpu.regs.sp = 0xFFFC;
+        peripherals.write(0xFFFC, 0x78);
+        peripherals.write(0xFFFD, 0x56);
+
+        cpu.pop(&mut peripherals, Reg16::DE);
+        cpu.pop(&mut peripherals, Reg16::DE);
+        cpu.pop(&mut peripherals, Reg16::DE);
+
+        assert_eq!(cpu.regs.de(), 0x5678);
+        assert_eq!(cpu.regs.sp, 0xFFFE);
+    }
+
+    #[test]
+    fn test_pop_hl_register() {
+        let mut cpu = cpu::Cpu {
+            regs: crate::registers::Registers::default(),
+            ctx: cpu::Ctx::default(),
+        };
+        let bootrom = crate::bootrom::Bootrom::new(vec![0x00; 256].into_boxed_slice());
+        let mut peripherals = peripherals::Peripherals::new(bootrom);
+
+        cpu.regs.sp = 0xFFFC;
+        peripherals.write(0xFFFC, 0xBC);
+        peripherals.write(0xFFFD, 0x9A);
+
+        cpu.pop(&mut peripherals, Reg16::HL);
+        cpu.pop(&mut peripherals, Reg16::HL);
+        cpu.pop(&mut peripherals, Reg16::HL);
+        assert_eq!(cpu.regs.hl(), 0x9ABC);
+        assert_eq!(cpu.regs.sp, 0xFFFE);
+    }
+
+    #[test]
+    fn test_pop_multiple() {
+        let mut cpu = cpu::Cpu {
+            regs: crate::registers::Registers::default(),
+            ctx: cpu::Ctx::default(),
+        };
+        let bootrom = crate::bootrom::Bootrom::new(vec![0x00; 256].into_boxed_slice());
+        let mut peripherals = peripherals::Peripherals::new(bootrom);
+
+        cpu.regs.sp = 0xFFF8;
+        peripherals.write(0xFFF8, 0xCD);
+        peripherals.write(0xFFF9, 0xAB);
+        peripherals.write(0xFFFA, 0x78);
+        peripherals.write(0xFFFB, 0x56);
+
+        cpu.pop(&mut peripherals, Reg16::BC);
+        cpu.pop(&mut peripherals, Reg16::BC);
+        cpu.pop(&mut peripherals, Reg16::BC);
+        assert_eq!(cpu.regs.bc(), 0xABCD);
+        assert_eq!(cpu.regs.sp, 0xFFFA);
+
+        cpu.pop(&mut peripherals, Reg16::DE);
+        cpu.pop(&mut peripherals, Reg16::DE);
+        cpu.pop(&mut peripherals, Reg16::DE);
+        assert_eq!(cpu.regs.de(), 0x5678);
+        assert_eq!(cpu.regs.sp, 0xFFFC);
     }
 }
