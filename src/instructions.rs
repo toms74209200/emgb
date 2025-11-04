@@ -330,6 +330,22 @@ impl cpu::Cpu {
             self.fetch(bus);
         }
     }
+    pub fn jr(&mut self, bus: &peripherals::Peripherals) {
+        static STEP: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+        match STEP.load(std::sync::atomic::Ordering::Relaxed) {
+            0 => {
+                if let Some(v) = self.read8(bus, crate::operand::Imm8) {
+                    self.regs.pc = self.regs.pc.wrapping_add(v as i8 as u16);
+                    return STEP.store(1, std::sync::atomic::Ordering::Relaxed);
+                }
+            }
+            1 => {
+                STEP.store(0, std::sync::atomic::Ordering::Relaxed);
+                self.fetch(bus);
+            }
+            _ => unreachable!(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1126,5 +1142,22 @@ mod tests {
         cpu.pop(&mut peripherals, Reg16::DE);
         assert_eq!(cpu.regs.de(), 0x5678);
         assert_eq!(cpu.regs.sp, 0xFFFC);
+    }
+
+    #[test]
+    fn test_jr() {
+        let mut cpu = cpu::Cpu {
+            regs: crate::registers::Registers::default(),
+            ctx: cpu::Ctx::default(),
+        };
+        let bootrom = crate::bootrom::Bootrom::new(vec![0x00; 256].into_boxed_slice());
+        let mut peripherals = peripherals::Peripherals::new(bootrom);
+
+        cpu.regs.pc = 0xC000;
+        peripherals.write(0xC000, 0x05);
+
+        cpu.jr(&peripherals);
+        cpu.jr(&peripherals);
+        assert_eq!(cpu.regs.pc, 0xC006);
     }
 }
