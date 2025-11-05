@@ -364,7 +364,7 @@ pub enum Direct8 {
 pub struct Direct16;
 #[derive(Clone, Copy, Debug)]
 pub enum Cond {
-    Nz,
+    NZ,
     Z,
     NC,
     C,

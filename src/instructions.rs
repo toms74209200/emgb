@@ -1,6 +1,6 @@
-use crate::cpu;
 use crate::operand::{IO8, IO16, Reg16};
 use crate::peripherals;
+use crate::{cpu, operand};
 
 impl cpu::Cpu {
     pub fn nop(&mut self, bus: &mut peripherals::Peripherals) {
@@ -337,6 +337,33 @@ impl cpu::Cpu {
                 if let Some(v) = self.read8(bus, crate::operand::Imm8) {
                     self.regs.pc = self.regs.pc.wrapping_add(v as i8 as u16);
                     return STEP.store(1, std::sync::atomic::Ordering::Relaxed);
+                }
+            }
+            1 => {
+                STEP.store(0, std::sync::atomic::Ordering::Relaxed);
+                self.fetch(bus);
+            }
+            _ => unreachable!(),
+        }
+    }
+    fn cond(&self, cond: operand::Cond) -> bool {
+        match cond {
+            operand::Cond::NZ => !self.regs.zf(),
+            operand::Cond::Z => self.regs.zf(),
+            operand::Cond::NC => !self.regs.cf(),
+            operand::Cond::C => self.regs.cf(),
+        }
+    }
+    pub fn jr_c(&mut self, bus: &peripherals::Peripherals, c: operand::Cond) {
+        static STEP: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+        match STEP.load(std::sync::atomic::Ordering::Relaxed) {
+            0 => {
+                if let Some(v) = self.read8(bus, crate::operand::Imm8) {
+                    STEP.store(1, std::sync::atomic::Ordering::Relaxed);
+                    if self.cond(c) {
+                        self.regs.pc = self.regs.pc.wrapping_add(v as i8 as u16);
+                        return;
+                    }
                 }
             }
             1 => {
@@ -1159,5 +1186,43 @@ mod tests {
         cpu.jr(&peripherals);
         cpu.jr(&peripherals);
         assert_eq!(cpu.regs.pc, 0xC006);
+    }
+
+    #[test]
+    fn test_jr_c_jump() {
+        let mut cpu = cpu::Cpu {
+            regs: crate::registers::Registers::default(),
+            ctx: cpu::Ctx::default(),
+        };
+        let bootrom = crate::bootrom::Bootrom::new(vec![0x00; 256].into_boxed_slice());
+        let mut peripherals = peripherals::Peripherals::new(bootrom);
+
+        cpu.regs.set_cf(true);
+        cpu.regs.pc = 0xC000;
+        peripherals.write(0xC000, 0x05);
+
+        cpu.jr_c(&peripherals, crate::operand::Cond::C);
+        cpu.jr_c(&peripherals, crate::operand::Cond::C);
+        assert_eq!(cpu.regs.pc, 0xC006);
+    }
+
+    #[test]
+    fn test_jr_c_no_jump() {
+        let mut cpu = cpu::Cpu {
+            regs: crate::registers::Registers::default(),
+            ctx: cpu::Ctx::default(),
+        };
+        let bootrom = crate::bootrom::Bootrom::new(vec![0x00; 256].into_boxed_slice());
+        let mut peripherals = peripherals::Peripherals::new(bootrom);
+
+        cpu.regs.set_cf(false);
+        cpu.regs.pc = 0xC000;
+        peripherals.write(0xC000, 0x05);
+
+        cpu.jr_c(&peripherals, crate::operand::Cond::C);
+        cpu.jr_c(&peripherals, crate::operand::Cond::C);
+        assert_eq!(cpu.regs.pc, 0xC002);
+
+        cpu.jr_c(&peripherals, crate::operand::Cond::C);
     }
 }
