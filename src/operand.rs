@@ -246,20 +246,20 @@ impl IO16<Imm16> for cpu::Cpu {
 
         match STEP.load(std::sync::atomic::Ordering::Relaxed) {
             0 => {
-                let v = bus.read(self.regs.pc);
-                self.regs.pc = self.regs.pc.wrapping_add(1);
-                VAL8.store(v, std::sync::atomic::Ordering::Relaxed);
-                STEP.store(1, std::sync::atomic::Ordering::Relaxed);
+                if let Some(lo) = self.read8(bus, Imm8) {
+                    VAL8.store(lo, std::sync::atomic::Ordering::Relaxed);
+                    STEP.store(1, std::sync::atomic::Ordering::Relaxed);
+                }
                 None
             }
             1 => {
-                let v = bus.read(self.regs.pc);
-                self.regs.pc = self.regs.pc.wrapping_add(1);
-                VAL16.store(
-                    u16::from_le_bytes([VAL8.load(std::sync::atomic::Ordering::Relaxed), v]),
-                    std::sync::atomic::Ordering::Relaxed,
-                );
-                STEP.store(2, std::sync::atomic::Ordering::Relaxed);
+                if let Some(hi) = self.read8(bus, Imm8) {
+                    VAL16.store(
+                        u16::from_le_bytes([VAL8.load(std::sync::atomic::Ordering::Relaxed), hi]),
+                        std::sync::atomic::Ordering::Relaxed,
+                    );
+                    STEP.store(2, std::sync::atomic::Ordering::Relaxed);
+                }
                 None
             }
             2 => {
@@ -625,6 +625,8 @@ mod tests {
         let bootrom = crate::bootrom::Bootrom::new(bootrom_data.into_boxed_slice());
         let peripherals = peripherals::Peripherals::new(bootrom);
         cpu.regs.pc = 0;
+        assert_eq!(cpu.read16(&peripherals, Imm16), None);
+        assert_eq!(cpu.read16(&peripherals, Imm16), None);
         assert_eq!(cpu.read16(&peripherals, Imm16), None);
         assert_eq!(cpu.read16(&peripherals, Imm16), None);
         assert_eq!(cpu.read16(&peripherals, Imm16), Some(val_expected));

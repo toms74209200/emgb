@@ -440,7 +440,7 @@ mod tests {
 
         cpu.regs.pc = 0;
 
-        for _ in 0..5 {
+        for _ in 0..6 {
             cpu.ld16(
                 &mut peripherals,
                 crate::operand::Reg16::BC,
