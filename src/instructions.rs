@@ -373,6 +373,26 @@ impl cpu::Cpu {
             _ => unreachable!(),
         }
     }
+    pub fn call(&mut self, bus: &mut peripherals::Peripherals) {
+        static STEP: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+        static VAL16: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(0);
+        match STEP.load(std::sync::atomic::Ordering::Relaxed) {
+            0 => {
+                if let Some(v) = self.read16(bus, crate::operand::Imm16) {
+                    VAL16.store(v, std::sync::atomic::Ordering::Relaxed);
+                    STEP.store(1, std::sync::atomic::Ordering::Relaxed);
+                }
+            }
+            1 => {
+                if self.push16(bus, self.regs.pc).is_some() {
+                    self.regs.pc = VAL16.load(std::sync::atomic::Ordering::Relaxed);
+                    STEP.store(0, std::sync::atomic::Ordering::Relaxed);
+                    self.fetch(bus);
+                }
+            }
+            _ => unreachable!(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1224,5 +1244,38 @@ mod tests {
         assert_eq!(cpu.regs.pc, 0xC002);
 
         cpu.jr_c(&peripherals, crate::operand::Cond::C);
+    }
+
+    #[test]
+    fn test_call() {
+        let mut cpu = cpu::Cpu {
+            regs: crate::registers::Registers::default(),
+            ctx: cpu::Ctx::default(),
+        };
+        let bootrom = crate::bootrom::Bootrom::new(vec![0x00; 256].into_boxed_slice());
+        let mut peripherals = peripherals::Peripherals::new(bootrom);
+
+        cpu.regs.pc = 0xC000;
+        cpu.regs.sp = 0xFFFE;
+
+        peripherals.write(0xC000, 0x34);
+        peripherals.write(0xC001, 0x12);
+
+        cpu.call(&mut peripherals);
+        cpu.call(&mut peripherals);
+        cpu.call(&mut peripherals);
+        cpu.call(&mut peripherals);
+        cpu.call(&mut peripherals);
+        cpu.call(&mut peripherals);
+        cpu.call(&mut peripherals);
+        cpu.call(&mut peripherals);
+        cpu.call(&mut peripherals);
+
+        assert_eq!(cpu.regs.pc, 0x1235);
+
+        assert_eq!(cpu.regs.sp, 0xFFFC);
+
+        assert_eq!(peripherals.read(0xFFFD), 0xC0);
+        assert_eq!(peripherals.read(0xFFFC), 0x02);
     }
 }
