@@ -393,6 +393,22 @@ impl cpu::Cpu {
             _ => unreachable!(),
         }
     }
+    pub fn ret(&mut self, bus: &peripherals::Peripherals) {
+        static STEP: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+        match STEP.load(std::sync::atomic::Ordering::Relaxed) {
+            0 => {
+                if let Some(v) = self.pop16(bus) {
+                    self.regs.pc = v;
+                    return STEP.store(1, std::sync::atomic::Ordering::Relaxed);
+                }
+            }
+            1 => {
+                STEP.store(0, std::sync::atomic::Ordering::Relaxed);
+                self.fetch(bus);
+            }
+            _ => unreachable!(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1244,6 +1260,37 @@ mod tests {
         assert_eq!(cpu.regs.pc, 0xC002);
 
         cpu.jr_c(&peripherals, crate::operand::Cond::C);
+    }
+
+    #[test]
+    fn test_ret() {
+        let mut cpu = cpu::Cpu {
+            regs: crate::registers::Registers::default(),
+            ctx: cpu::Ctx::default(),
+        };
+        let bootrom = crate::bootrom::Bootrom::new(vec![0x00; 256].into_boxed_slice());
+        let mut peripherals = peripherals::Peripherals::new(bootrom);
+
+        cpu.regs.sp = 0xFFFC;
+        peripherals.write(0xFFFC, 0x34);
+        peripherals.write(0xFFFD, 0x12);
+
+        // Cycle 1: pop16 step 0
+        cpu.ret(&peripherals);
+        assert_eq!(cpu.regs.sp, 0xFFFD);
+
+        // Cycle 2: pop16 step 1
+        cpu.ret(&peripherals);
+        assert_eq!(cpu.regs.sp, 0xFFFE);
+
+        // Cycle 3: pop16 step 2
+        cpu.ret(&peripherals);
+        assert_eq!(cpu.regs.sp, 0xFFFE);
+
+        // Cycle 4: fetch
+        cpu.ret(&peripherals);
+        assert_eq!(cpu.regs.pc, 0x1235); // After fetch, PC is incremented
+        assert_eq!(cpu.regs.sp, 0xFFFE);
     }
 
     #[test]
